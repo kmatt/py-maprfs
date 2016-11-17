@@ -526,8 +526,7 @@ class HDFileSystem(object):
 
     def tail(self, path, size=1024):
         """ Return last bytes of file """
-        # todo: This logic doesn't work for mapr
-        length = self.du(path)[ensure_trailing_slash(path)]
+        length = self.info(path)['size']
         if size > length:
             return self.cat(path)
         with self.open(path, 'rb') as f:
