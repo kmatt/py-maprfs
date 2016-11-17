@@ -277,24 +277,49 @@ class HDFileSystem(object):
 
     def get_block_locations(self, path, start=0, length=0):
         """ Fetch physical locations of blocks """
-        raise NotImplementedError()
 
         if not self._handle:
             raise IOError("Filesystem not connected")
+
         start = int(start) or 0
         length = int(length) or self.info(path)['size']
-        nblocks = ctypes.c_int(0)
-        out = _lib.hdfsGetFileBlockLocations(self._handle, ensure_bytes(path),
-                                ctypes.c_int64(start), ctypes.c_int64(length),
-                                ctypes.byref(nblocks))
-        locs = []
-        for i in range(nblocks.value):
-            block = out[i]
-            hosts = [block.hosts[i] for i in
-                     range(block.numOfNodes)]
-            locs.append({'hosts': hosts, 'length': block.length,
-                         'offset': block.offset})
-        _lib.hdfsFreeFileBlockLocations(out, nblocks)
+        # nblocks = ctypes.c_int(0)
+
+        # out = _lib.hdfsGetFileBlockLocations(self._handle, ensure_bytes(path),
+        #                         ctypes.c_int64(start), ctypes.c_int64(length),
+        #                         ctypes.byref(nblocks))
+
+        out = _lib.hdfsGetHosts(self._handle, ensure_bytes(path), ctypes.c_int64(start), ctypes.c_int64(length))
+
+        # ``out`` is a pointer to an array of pointers; on error it will be NULL
+        try:
+            arr = out.contents
+        except ValueError:
+            # TODO Collect the error message
+            raise
+
+        # ``arr`` is a dynamically allocated array; when we find NULL we've reached the end
+        hostnames = list()
+        for h in arr:
+            if h is None:
+                break
+            hostnames.append(h)
+
+        # Unlike hdfsGetFileBlockLocations, hdfsGetHosts only gives us a list of hostnames.
+        # TODO I'm not sure this is correct in all cases
+        locs = [{'hosts': hostnames, 'length': length, 'offset': start}]
+
+        _lib.hdfsFreeHosts(out)
+
+        # locs = []
+        # for i in range(nblocks.value):
+        #     block = out[i]
+        #     hosts = [block.hosts[i] for i in
+        #              range(block.numOfNodes)]
+        #     locs.append({'hosts': hosts, 'length': block.length,
+        #                  'offset': block.offset})
+        # _lib.hdfsFreeFileBlockLocations(out, nblocks)
+
         return locs
 
     def info(self, path):
