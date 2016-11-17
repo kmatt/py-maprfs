@@ -779,10 +779,14 @@ class HDFile(object):
 
     def flush(self):
         """ Send buffer to the data-node; actual write to disc may happen later """
-        _lib.hdfsFlush(self._fs, self._handle)
+        if 'w' in self.mode:
+            _lib.hdfsFlush(self._fs, self._handle)
 
     def close(self):
         """ Flush and close file, ensuring the data is readable """
+        # Prevent multiple attempts to close the file, which will cause libhdfs to throw errors
+        if self.mode == 'closed':
+            return None
         self.flush()
         _lib.hdfsCloseFile(self._fs, self._handle)
         self._handle = None  # _libhdfs releases memory
