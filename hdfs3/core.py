@@ -382,7 +382,8 @@ class HDFileSystem(object):
         num = ctypes.c_int(0)
         fi = _lib.hdfsListDirectory(self._handle, ensure_bytes(path), ctypes.byref(num))
         out = [ensure_string(info_to_dict(fi[i])) for i in range(num.value)]
-        _lib.hdfsFreeFileInfo(fi, num.value)
+        # If the directory is empty, then ``fi`` does not need to be freed
+        _lib.hdfsFreeFileInfo(fi, num.value) if num.value > 0 else None
         if detail:
             return out
         else:
