@@ -129,6 +129,27 @@ def ensure_trailing_slash(s, ensure=True):
     return s
 
 
+def until_null(p):
+    """
+    Yield elements from a dynamically allocated array
+
+    ``p`` is a pointer to a dynamically allocated array. Returns a generator
+    that yields elements from the array until accessing the next element raises
+    a ValueError or returns None.
+    """
+    ix = 0
+    while True:
+        try:
+            val = p[ix]
+            ix += 1
+
+            if val is None: raise ValueError()
+
+            yield val
+        except ValueError:
+            raise StopIteration()
+
+
 class HDFileSystem(object):
     """ Connection to an HDFS namenode
 
@@ -292,18 +313,28 @@ class HDFileSystem(object):
         out = _lib.hdfsGetHosts(self._handle, ensure_bytes(path), ctypes.c_int64(start), ctypes.c_int64(length))
 
         # ``out`` is a pointer to an array of pointers; on error it will be NULL
+
+        # ``out`` is a pointer; if the library call failed (for example, the
+        # file doesn't exist), then trying to access ``out.contents`` will
+        # raise a ValueError for trying to access a null pointer
         try:
-            arr = out.contents
+            out.contents
         except ValueError:
             # TODO Collect the error message
             raise
 
-        # ``arr`` is a dynamically allocated array; when we find NULL we've reached the end
-        hostnames = list()
-        for h in arr:
-            if h is None:
-                break
-            hostnames.append(h)
+        # ``out`` is a pointer to a dynamically allocated array of dynamically
+        # allocated arrays of char * strings. (So unlike the Apache
+        # hdfsGetFileBlockLocations, we only get lists of host names.) To read
+        # ``out``, we iterate over ``out[i]`` until we raise a ValueError for
+        # null pointer access; for each element ``a`` we again iterate over it
+        # until we reach ``None`` (which represents the null pointer; not sure
+        # why it raises an exception in the outer iteration).
+        hostnames = list(list(until_null(blockp)) for blockp in until_null(out))
+
+        # ``hostnames[i]`` is the list of hosts that have block i. We need to
+        # calculate offsets and lengths.
+        
 
         # Unlike hdfsGetFileBlockLocations, hdfsGetHosts only gives us a list of hostnames.
         # TODO I'm not sure this is correct in all cases
