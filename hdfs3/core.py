@@ -153,6 +153,7 @@ class HDFileSystem(object):
         self.host = host
         self.port = port
         self.user = user
+        self._handle = None
 
         if ticket_cache and token:
             m = "It is not possible to use ticket_cache and token in same time"
@@ -161,7 +162,6 @@ class HDFileSystem(object):
         self.ticket_cache = ticket_cache
         self.token = token
         self.pars = pars or {}
-        self._handle = None
         if connect:
             self.connect()
 
