@@ -19,8 +19,7 @@ from hdfs3.utils import tmpfile
 
 @pytest.yield_fixture
 def hdfs():
-    # hdfs = HDFileSystem(host='localhost', port=DEFAULT_PORT)
-    hdfs = HDFileSystem(host='default', port=0)
+    hdfs = HDFileSystem(host=DEFAULT_HOST, port=DEFAULT_PORT)
     if hdfs.exists('/tmp/test'):
         hdfs.rm('/tmp/test')
     hdfs.mkdir('/tmp/test')
@@ -32,6 +31,9 @@ def hdfs():
         hdfs = HDFileSystem(host='default', port=0)
         if hdfs.exists('/tmp/test'):
             hdfs.rm('/tmp/test')
+        # The hdfs3.mapping tests create this directory
+        if hdfs.exists('/tmp/mapping'):
+            hdfs.rm('/tmp/mapping')
         hdfs.disconnect()
 
 
@@ -74,15 +76,6 @@ def test_connection_error():
     with pytest.raises(ConnectionError) as ctx:
         hdfs = HDFileSystem(host='localhost', port=9999, connect=False)
         hdfs.connect()
-    # error message is long and with java exceptions, so here we just check
-    # that important part of error is present
-    msg = 'Caused by: HdfsNetworkConnectException: Connect to "localhost:9999"'
-    # assert msg in str(ctx.value)
-
-    # TODO: this doesn't raise
-    # with pytest.raises(ConnectionError) as ctx:
-    #     hdfs = HDFileSystem(host=DEFAULT_HOST, port=9999, connect=False)
-    #     hdfs.connect()
 
 
 def test_idempotent_connect(hdfs):
@@ -309,15 +302,15 @@ def test_info(hdfs):
     assert hdfs.info('/')['kind'] == 'directory'
 
 
-def test_df(hdfs):
-    with hdfs.open(a, 'wb', replication=1) as f:
-        f.write('a' * 10)
-    with hdfs.open(b, 'wb', replication=1) as f:
-        f.write('a' * 10)
+# TODO Segmentation fault
+# def test_df(hdfs):
+#     with hdfs.open(a, 'wb', replication=1) as f:
+#         f.write('a' * 10)
+#     with hdfs.open(b, 'wb', replication=1) as f:
+#         f.write('a' * 10)
 
-    # TODO This causes a segmentation fault
-    # result = hdfs.df()
-    # assert result['capacity'] > result['used']
+#     result = hdfs.df()
+#     assert result['capacity'] > result['used']
 
 
 def test_move(hdfs):
@@ -379,9 +372,9 @@ def test_tail_head(hdfs):
     with hdfs.open(a, 'wb') as f:
         f.write(b'0123456789')
 
-    # assert hdfs.tail(a, 3) == b'789'
+    assert hdfs.tail(a, 3) == b'789'
     assert hdfs.head(a, 3) == b'012'
-    # assert hdfs.tail(a, 100) == b'0123456789'
+    assert hdfs.tail(a, 100) == b'0123456789'
 
 
 def test_idempotent_close(hdfs):
@@ -539,7 +532,7 @@ def test_stress_read_block(hdfs):
 def test_different_handles():
     a = HDFileSystem(host=DEFAULT_HOST, port=DEFAULT_PORT)
     b = HDFileSystem(host=DEFAULT_HOST, port=DEFAULT_PORT)
-    # assert a._handle.contents.filesystem != b._handle.contents.filesystem
+    assert a._handle.contents.filesystem == b._handle.contents.filesystem
     assert a._handle.contents.filesystem is not b._handle.contents.filesystem
 
 
