@@ -28,6 +28,8 @@ def hdfs():
     try:
         yield hdfs
     finally:
+        # The consumer of the test fixture may have disconnected ``hdfs`` already
+        hdfs = HDFileSystem(host='default', port=0)
         if hdfs.exists('/tmp/test'):
             hdfs.rm('/tmp/test')
         hdfs.disconnect()
@@ -653,13 +655,12 @@ def test_get(hdfs):
 
 def test_open_errors(hdfs):
     hdfs.touch(a)
-    # with pytest.raises(ValueError):
-    #     hdfs.open(a, 'rb', block_size=1000)
+    with pytest.raises(ValueError):
+        hdfs.open(a, 'rb', block_size=1000)
 
-    # TODO Why does this cause a segmentation fault?
-    # hdfs.disconnect()
-    # with pytest.raises(IOError):
-    #     hdfs.open(a, 'wb')
+    hdfs.disconnect()
+    with pytest.raises(IOError):
+        hdfs.open(a, 'wb')
 
 
 def test_du(hdfs):

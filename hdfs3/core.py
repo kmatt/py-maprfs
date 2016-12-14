@@ -197,12 +197,32 @@ class HDFileSystem(object):
         self._handle = None
         self.connect()
 
+    def __repr__(self):
+        state = ['Disconnected', 'Connected'][self._handle is not None]
+        return 'hdfs://%s:%s, %s' % (self.host, self.port, state)
+
+    def __del__(self):
+        if self._handle:
+            self.disconnect()
+
+    def _ensure_connected(self):
+        """
+        Raise an exception if not connected
+
+        Calling library functions when ``self._handle`` is None can cause the
+        library to print warning messages or, in some cases, a segmentation
+        fault. (``hdfsExists`` is one example of this.) Use this function as a
+        guard before calling library functions.
+        """
+        if not self.connected():
+            raise IOError("File system is not connected.")
+
     def connect(self):
         """ Connect to the name node
 
         This happens automatically at startup
         """
-        if self._handle:
+        if self.connected():
             return
 
         o = _lib.hdfsNewBuilder()
@@ -236,10 +256,14 @@ class HDFileSystem(object):
 
     def disconnect(self):
         """ Disconnect from name node """
-        if self._handle:
+        if self.connected():
             logger.debug("Disconnect from handle %d", self._handle.contents.filesystem)
             _lib.hdfsDisconnect(self._handle)
-        self._handle = None
+            self._handle = None
+
+    def connected(self):
+        """Indicates whether this object is currently connected."""
+        return self._handle is not None
 
     def open(self, path, mode='rb', replication=0, buff=0, block_size=0):
         """ Open a file for reading or writing
@@ -255,8 +279,7 @@ class HDFileSystem(object):
         block_size: int
             Size of data-node blocks if writing
         """
-        if not self._handle:
-            raise IOError("Filesystem not connected")
+        self._ensure_connected()
         if block_size and mode != 'wb':
             raise ValueError('Block size only valid when writing new file')
         if ('a' in mode and self.exists(path) and
@@ -292,15 +315,13 @@ class HDFileSystem(object):
 
     def df(self):
         """ Used/free disc space on the HDFS system """
+        self._ensure_connected()
         cap = _lib.hdfsGetCapacity(self._handle)
         used = _lib.hdfsGetUsed(self._handle)
         return {'capacity': cap, 'used': used, 'percent-free': 100*(cap-used)/cap}
 
     def get_block_locations(self, path, start=0, length=0):
         """ Fetch physical locations of blocks """
-
-        if not self._handle:
-            raise IOError("Filesystem not connected")
 
         start = int(start) or 0
         length = int(length) or self.info(path)['size']
@@ -310,6 +331,7 @@ class HDFileSystem(object):
         #                         ctypes.c_int64(start), ctypes.c_int64(length),
         #                         ctypes.byref(nblocks))
 
+        self._ensure_connected()
         out = _lib.hdfsGetHosts(self._handle, ensure_bytes(path), ctypes.c_int64(start), ctypes.c_int64(length))
 
         # ``out`` is a pointer to an array of pointers; on error it will be NULL
@@ -334,7 +356,7 @@ class HDFileSystem(object):
 
         # ``hostnames[i]`` is the list of hosts that have block i. We need to
         # calculate offsets and lengths.
-        
+
 
         # Unlike hdfsGetFileBlockLocations, hdfsGetHosts only gives us a list of hostnames.
         # TODO I'm not sure this is correct in all cases
@@ -357,6 +379,7 @@ class HDFileSystem(object):
         """ File information (as a dict) """
         if not self.exists(path):
             raise FileNotFoundError(path)
+        self._ensure_connected()
         fi = _lib.hdfsGetPathInfo(self._handle, ensure_bytes(path)).contents
         out = info_to_dict(fi)
         _lib.hdfsFreeFileInfo(ctypes.byref(fi), 1)
@@ -411,6 +434,7 @@ class HDFileSystem(object):
         if not self.exists(path):
             raise FileNotFoundError(path)
         num = ctypes.c_int(0)
+        self._ensure_connected()
         fi = _lib.hdfsListDirectory(self._handle, ensure_bytes(path), ctypes.byref(num))
         out = [ensure_string(info_to_dict(fi[i])) for i in range(num.value)]
         # If the directory is empty, then ``fi`` does not need to be freed
@@ -420,16 +444,9 @@ class HDFileSystem(object):
         else:
             return [o['name'] for o in out]
 
-    def __repr__(self):
-        state = ['Disconnected', 'Connected'][self._handle is not None]
-        return 'hdfs://%s:%s, %s' % (self.host, self.port, state)
-
-    def __del__(self):
-        if self._handle:
-            self.disconnect()
-
     def mkdir(self, path):
         """ Make directory at path """
+        self._ensure_connected()
         out = _lib.hdfsCreateDirectory(self._handle, ensure_bytes(path))
         if out != 0:
             # msg = ensure_string(_lib.hdfsGetLastError())
@@ -446,6 +463,7 @@ class HDFileSystem(object):
         """
         if replication < 0:
             raise ValueError('Replication must be positive, or 0 for system default')
+        self._ensure_connected()
         out = _lib.hdfsSetReplication(self._handle, ensure_bytes(path),
                                      ctypes.c_int16(int(replication)))
         if out != 0:
@@ -457,6 +475,7 @@ class HDFileSystem(object):
         """ Move file at path1 to path2 """
         if not self.exists(path1):
             raise FileNotFoundError(path1)
+        self._ensure_connected()
         out = _lib.hdfsRename(self._handle, ensure_bytes(path1), ensure_bytes(path2))
         return out == 0
 
@@ -464,6 +483,7 @@ class HDFileSystem(object):
         "Use recursive for `rm -r`, i.e., delete directory and contents"
         if not self.exists(path):
             raise FileNotFoundError(path)
+        self._ensure_connected()
         out = _lib.hdfsDelete(self._handle, ensure_bytes(path), bool(recursive))
         if out != 0:
             # msg = ensure_string(_lib.hdfsGetLastError())
@@ -472,6 +492,7 @@ class HDFileSystem(object):
 
     def exists(self, path):
         """ Is there an entry at path? """
+        self._ensure_connected()
         out = _lib.hdfsExists(self._handle, ensure_bytes(path) )
         return out == 0
 
@@ -498,6 +519,7 @@ class HDFileSystem(object):
         """
         if not self.exists(path):
             raise FileNotFoundError(path)
+        self._ensure_connected()
         out = _lib.hdfsChmod(self._handle, ensure_bytes(path), ctypes.c_short(mode))
         if out != 0:
             # msg = ensure_string(_lib.hdfsGetLastError())
@@ -508,6 +530,7 @@ class HDFileSystem(object):
         """ Change owner/group """
         if not self.exists(path):
             raise FileNotFoundError(path)
+        self._ensure_connected()
         out = _lib.hdfsChown(self._handle, ensure_bytes(path), ensure_bytes(owner),
                             ensure_bytes(group))
         if out != 0:
@@ -816,13 +839,17 @@ class HDFile(object):
 
     def close(self):
         """ Flush and close file, ensuring the data is readable """
-        # Prevent multiple attempts to close the file, which will cause libhdfs to throw errors
         if self.mode == 'closed':
-            return None
-        self.flush()
-        _lib.hdfsCloseFile(self._fs, self._handle)
-        self._handle = None  # _libhdfs releases memory
-        self.mode = 'closed'
+            # Prevent multiple attempts to close the file, which will cause libhdfs to throw errors
+            pass
+        elif self._handle is None:
+            # HDFile( ... ) threw an IOError; we never got a handle and we're cleaning up an empty object
+            self.mode = 'closed'
+        else:
+            self.flush()
+            _lib.hdfsCloseFile(self._fs, self._handle)
+            self._handle = None  # _libhdfs releases memory
+            self.mode = 'closed'
 
     @property
     def read1(self):
