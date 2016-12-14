@@ -129,27 +129,6 @@ def ensure_trailing_slash(s, ensure=True):
     return s
 
 
-def until_null(p):
-    """
-    Yield elements from a dynamically allocated array
-
-    ``p`` is a pointer to a dynamically allocated array. Returns a generator
-    that yields elements from the array until accessing the next element raises
-    a ValueError or returns None.
-    """
-    ix = 0
-    while True:
-        try:
-            val = p[ix]
-            ix += 1
-
-            if val is None: raise ValueError()
-
-            yield val
-        except ValueError:
-            raise StopIteration()
-
-
 class HDFileSystem(object):
     """ Connection to an HDFS namenode
 
@@ -320,21 +299,54 @@ class HDFileSystem(object):
         used = _lib.hdfsGetUsed(self._handle)
         return {'capacity': cap, 'used': used, 'percent-free': 100*(cap-used)/cap}
 
-    def get_block_locations(self, path, start=0, length=0):
-        """ Fetch physical locations of blocks """
+    def get_hosts(self, path, start=None, length=None):
+        """ Fetch the physical locations of file chunks
 
-        start = int(start) or 0
-        length = int(length) or self.info(path)['size']
-        # nblocks = ctypes.c_int(0)
+        Returns a list of lists of hostnames for each chunk.
 
-        # out = _lib.hdfsGetFileBlockLocations(self._handle, ensure_bytes(path),
-        #                         ctypes.c_int64(start), ctypes.c_int64(length),
-        #                         ctypes.byref(nblocks))
+        Ex:
+            h = get_hosts('foo')
+            len(h) # The number of chunks
+            h[2]   # List of hosts that have a copy of the third chunk
+        """
+
+        # Let ``p`` be the return value from ``_lib.hdfsGetHosts``. ``p`` is a
+        # pointer to a dynamically allocated array of dynamically allocated
+        # arrays of c_char_p.
+        #
+        # p[block_index][host_index]
+        # If there was a library error, p.contents, p[0], and p[0].contents -> the same ValueError for NULL pointer access
+        # p[block_index + 1].contents raises ValueError -> block_index is the last block
+        # p[block_index][host_index + 1] is None -> host_index is the last host
+        #
+        # The following two helpers are for processing this data structure.
+
+        def until_null(p):
+            ix = 0
+            while True:
+                try:
+                    p[ix].contents
+                    yield p[ix]
+                    ix += 1
+                except ValueError:
+                    raise StopIteration()
+
+        def until_none(p):
+            ix = 0
+            while True:
+                if p[ix] is None:
+                    raise StopIteration()
+                else:
+                    yield p[ix]
+                    ix += 1
+
+        if start is None:
+            start = 0
+        if length is None:
+            length = self.info(path)['size']
 
         self._ensure_connected()
-        out = _lib.hdfsGetHosts(self._handle, ensure_bytes(path), ctypes.c_int64(start), ctypes.c_int64(length))
-
-        # ``out`` is a pointer to an array of pointers; on error it will be NULL
+        out = _lib.hdfsGetHosts(self._handle, ensure_bytes(path), start, length)
 
         # ``out`` is a pointer; if the library call failed (for example, the
         # file doesn't exist), then trying to access ``out.contents`` will
@@ -345,33 +357,59 @@ class HDFileSystem(object):
             # TODO Collect the error message
             raise
 
-        # ``out`` is a pointer to a dynamically allocated array of dynamically
-        # allocated arrays of char * strings. (So unlike the Apache
-        # hdfsGetFileBlockLocations, we only get lists of host names.) To read
-        # ``out``, we iterate over ``out[i]`` until we raise a ValueError for
-        # null pointer access; for each element ``a`` we again iterate over it
-        # until we reach ``None`` (which represents the null pointer; not sure
-        # why it raises an exception in the outer iteration).
-        hostnames = list(list(until_null(blockp)) for blockp in until_null(out))
-
-        # ``hostnames[i]`` is the list of hosts that have block i. We need to
-        # calculate offsets and lengths.
-
-
-        # Unlike hdfsGetFileBlockLocations, hdfsGetHosts only gives us a list of hostnames.
-        # TODO I'm not sure this is correct in all cases
-        locs = [{'hosts': hostnames, 'length': length, 'offset': start}]
+        hostnames = list(list(until_none(blockp)) for blockp in until_null(out))
 
         _lib.hdfsFreeHosts(out)
 
-        # locs = []
-        # for i in range(nblocks.value):
-        #     block = out[i]
-        #     hosts = [block.hosts[i] for i in
-        #              range(block.numOfNodes)]
-        #     locs.append({'hosts': hosts, 'length': block.length,
-        #                  'offset': block.offset})
-        # _lib.hdfsFreeFileBlockLocations(out, nblocks)
+        return hostnames
+
+    def get_block_locations(self, path, start=None, length=None):
+        """ Fetch physical locations of blocks """
+
+        pathinfo = self.info(path)
+
+        if start is None:
+            start = 0
+        if length is None:
+            length = pathinfo['size']
+
+        assert start >= 0, "Invalid byte range"
+        assert length >= 0, "Invalid length"
+
+        pathsize = pathinfo['size']
+
+        assert (start + length) <= pathsize, "File is smaller than requested range"
+
+        # MapR allows for setting the chunk size at the file level
+        chunksize = pathinfo['block_size']
+
+        # Which chunk does offset ``start`` fall into?
+        first_chunk_index = start // chunksize
+        # What about offset ``start`` + ``length``? (Like Python lists. If
+        # chunksize == 10, start == 9, length == 1, we're talking about the
+        # slice that includes only byte number 9 in the file, which is only the
+        # first chunk.) (Need a special case to handle getting chunks for
+        # zero-length file.)
+        last_chunk_index = max(0, start + length - 1) // chunksize
+        # How many chunks are in this file? (This number is the largest chunk
+        # index for the file; the number of chunks minus one.)
+        max_chunk_index = max(0, pathsize - 1) // chunksize
+
+        # We need a list of the byte indexes where the chunks start
+        chunk_starts = list(range(first_chunk_index * chunksize, (last_chunk_index + 1) * chunksize, chunksize))
+        # And a list of how many bytes are contained in each chunk. This is
+        # just chunksize, except for the last chunk. We need to check if the
+        # request byte range includes the last chunk in the file.
+        chunk_lengths = [chunksize] * len(chunk_starts)
+        if last_chunk_index == max_chunk_index:
+            chunk_lengths[-1] = pathsize % chunksize
+
+        chunk_hosts = self.get_hosts(path, start, length)
+
+        locs = [
+            {'hosts': names, 'offset': strt, 'length': lngth}
+            for names, strt, lngth in zip(chunk_hosts, chunk_starts, chunk_lengths)
+        ]
 
         return locs
 

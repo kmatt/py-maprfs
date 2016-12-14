@@ -673,14 +673,13 @@ def test_du(hdfs):
     assert hdfs.du('/tmp/test/', total=True) == {'/tmp/test/': 3 + 4}
 
 
-# TODO: not implementd in mapr
-# def test_get_block_locations(hdfs):
-#     with hdfs.open(a, 'wb') as f:
-#         f.write(b'123')
-#
-#     locs = hdfs.get_block_locations(a)
-#     assert len(locs) == 1
-#     assert locs[0]['length'] == 3
+def test_get_block_locations(hdfs):
+    with hdfs.open(a, 'wb') as f:
+        f.write(b'123')
+
+    locs = hdfs.get_block_locations(a)
+    assert len(locs) == 1
+    assert locs[0]['length'] == 3
 
 
 # TODO: ls in mapr fails for files
