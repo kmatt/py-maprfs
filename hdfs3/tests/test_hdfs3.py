@@ -675,15 +675,13 @@ def test_get_block_locations(hdfs):
     assert locs[0]['length'] == 3
 
 
-# TODO: ls in mapr fails for files
-# def test_chmod(hdfs):
-#     hdfs.touch(a)
-#     assert hdfs.ls(a)[0]['permissions'] == 0o777
-#     hdfs.chmod(a, 0o500)
-#     assert hdfs.ls(a)[0]['permissions'] == 0o500
-#     hdfs.chmod(a, 0o100)
-#     with pytest.raises(IOError):
-#         hdfs.open(a, 'ab')
+def test_chmod(hdfs):
+    hdfs.touch(a)
+    hdfs.chmod(a, 0o500)
+    assert hdfs.ls(a)[0]['permissions'] == 0o500
+    hdfs.chmod(a, 0o100)
+    with pytest.raises(IOError):
+        hdfs.open(a, 'ab')
 
 
 @pytest.mark.xfail

@@ -471,12 +471,21 @@ class HDFileSystem(object):
         """
         if not self.exists(path):
             raise FileNotFoundError(path)
-        num = ctypes.c_int(0)
-        self._ensure_connected()
-        fi = _lib.hdfsListDirectory(self._handle, ensure_bytes(path), ctypes.byref(num))
-        out = [ensure_string(info_to_dict(fi[i])) for i in range(num.value)]
-        # If the directory is empty, then ``fi`` does not need to be freed
-        _lib.hdfsFreeFileInfo(fi, num.value) if num.value > 0 else None
+
+        pathinfo = self.info(path)
+
+        if pathinfo['kind'] == 'file':
+            out = [pathinfo]
+        elif pathinfo['kind'] == 'directory':
+            self._ensure_connected()
+            num = ctypes.c_int(0)
+            fi = _lib.hdfsListDirectory(self._handle, ensure_bytes(path), ctypes.byref(num))
+            out = [ensure_string(info_to_dict(fi[i])) for i in range(num.value)]
+            # If the directory is empty, then ``fi`` does not need to be freed
+            _lib.hdfsFreeFileInfo(fi, num.value) if num.value > 0 else None
+        else:
+            raise TypeError("Path has an unknown type: %s" % pathinfo['kind'])
+
         if detail:
             return out
         else:
