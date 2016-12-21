@@ -1,8 +1,7 @@
-name: hdfs3-docs
+name: maprfs-docs
 channels:
     - dask
 dependencies:
     - python
-    - hdfs3
-    - libhdfs3
+    - maprfs
     - numpydoc

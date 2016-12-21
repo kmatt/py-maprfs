@@ -1,14 +1,17 @@
-hdfs3
-=====
+maprfs
+======
 
-|Build Status|
+maprfs is a lightweight Python wrapper for MapRFS_.
 
-hdfs3 is a lightweight Python wrapper for libhdfs3_, a native C/C++ library to interact with the Hadoop File System (HDFS).
+.. _MapRFS: https://www.mapr.com/products/mapr-fs
 
-View the documentation_ for hdfs3.
+Running
+-------
 
-.. _libhdfs3: https://github.com/PivotalRD/libhdfs3
-.. _documentation: http://hdfs3.readthedocs.io/en/latest/
+You must set a few environment variables prior to importing the `maprfs` package. For example:
 
-.. |Build Status| image:: https://travis-ci.org/dask/hdfs3.svg?branch=master
-    :target: https://travis-ci.org/dask/hdfs3
+.. code-block:: bash
+
+   export JAVA_HOME=/usr/java/jdk1.8.0_101/
+   export HADOOP_HOME=/opt/mapr/hadoop/hadoop-2.7.0/
+   export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/java/jdk1.8.0_101/jre/lib/amd64/server

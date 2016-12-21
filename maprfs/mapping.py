@@ -19,7 +19,7 @@ class HDFSMap(MutableMapping):
 
     Examples
     --------
-    >>> hdfs = hdfs3.HDFileSystem() # doctest: +SKIP
+    >>> hdfs = maprfs.HDFileSystem() # doctest: +SKIP
     >>> mw = HDFSMap(hdfs, '/writable/path/') # doctest: +SKIP
     >>> mw['loc1'] = b'Hello World' # doctest: +SKIP
     >>> list(mw.keys()) # doctest: +SKIP

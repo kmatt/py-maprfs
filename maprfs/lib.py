@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Low-level interface to libhdfs3
+Low-level interface to maprfs
 """
 
 import sys
@@ -11,12 +11,9 @@ PY3 = sys.version_info.major > 2
 
 
 try:
-    # _lib = ct.cdll.LoadLibrary('libhdfs3.so')
     _lib = ct.cdll.LoadLibrary('/opt/mapr/support/python/MapRPythonClient.a')
 except OSError:
-    raise ImportError("Can not find the shared library: libhdfs3.so\n"
-            "See installation instructions at "
-            "http://hdfs3.readthedocs.io/en/latest/install.html")
+    raise ImportError("Can not find the shared library: MapRPythonClient.a")
 
 
 tSize = ct.c_int32

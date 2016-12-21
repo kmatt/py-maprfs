@@ -675,7 +675,7 @@ class HDFileSystem(object):
 
         See Also
         --------
-        hdfs3.utils.read_block
+        maprfs.utils.read_block
         """
         with self.open(fn, 'rb') as f:
             size = f.info()['size']

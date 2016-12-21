@@ -1,4 +1,4 @@
-from hdfs3.utils import seek_delimiter, read_block
+from maprfs.utils import seek_delimiter, read_block
 from io import BytesIO
 
 

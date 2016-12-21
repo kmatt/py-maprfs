@@ -10,11 +10,11 @@ from threading import Thread
 
 import pytest
 
-from hdfs3 import HDFileSystem, lib
-from hdfs3.core import conf_to_dict, ensure_bytes, ensure_string
-from hdfs3.core import DEFAULT_HOST, DEFAULT_PORT
-from hdfs3.compatibility import bytes, unicode, ConnectionError
-from hdfs3.utils import tmpfile
+from maprfs import HDFileSystem, lib
+from maprfs.core import conf_to_dict, ensure_bytes, ensure_string
+from maprfs.core import DEFAULT_HOST, DEFAULT_PORT
+from maprfs.compatibility import bytes, unicode, ConnectionError
+from maprfs.utils import tmpfile
 
 
 @pytest.yield_fixture
@@ -31,7 +31,7 @@ def hdfs():
         hdfs = HDFileSystem(host='default', port=0)
         if hdfs.exists('/tmp/test'):
             hdfs.rm('/tmp/test')
-        # The hdfs3.mapping tests create this directory
+        # The maprfs.mapping tests create this directory
         if hdfs.exists('/tmp/mapping'):
             hdfs.rm('/tmp/mapping')
         hdfs.disconnect()

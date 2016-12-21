@@ -1,5 +1,5 @@
-from hdfs3.tests.test_hdfs3 import hdfs
-from hdfs3.mapping import HDFSMap
+from maprfs.tests.test_maprfs import hdfs
+from maprfs.mapping import HDFSMap
 
 root = '/tmp/mapping'
 
