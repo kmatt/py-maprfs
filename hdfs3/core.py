@@ -153,6 +153,7 @@ class HDFileSystem(object):
         self.host = host
         self.port = port
         self.user = user
+        self._handle = None
 
         if ticket_cache and token:
             m = "It is not possible to use ticket_cache and token in same time"
@@ -161,7 +162,6 @@ class HDFileSystem(object):
         self.ticket_cache = ticket_cache
         self.token = token
         self.pars = pars or {}
-        self._handle = None
         if connect:
             self.connect()
 
@@ -176,12 +176,32 @@ class HDFileSystem(object):
         self._handle = None
         self.connect()
 
+    def __repr__(self):
+        state = ['Disconnected', 'Connected'][self._handle is not None]
+        return 'hdfs://%s:%s, %s' % (self.host, self.port, state)
+
+    def __del__(self):
+        if self._handle:
+            self.disconnect()
+
+    def _ensure_connected(self):
+        """
+        Raise an exception if not connected
+
+        Calling library functions when ``self._handle`` is None can cause the
+        library to print warning messages or, in some cases, a segmentation
+        fault. (``hdfsExists`` is one example of this.) Use this function as a
+        guard before calling library functions.
+        """
+        if not self.connected():
+            raise IOError("File system is not connected.")
+
     def connect(self):
         """ Connect to the name node
 
         This happens automatically at startup
         """
-        if self._handle:
+        if self.connected():
             return
 
         o = _lib.hdfsNewBuilder()
@@ -215,10 +235,14 @@ class HDFileSystem(object):
 
     def disconnect(self):
         """ Disconnect from name node """
-        if self._handle:
+        if self.connected():
             logger.debug("Disconnect from handle %d", self._handle.contents.filesystem)
             _lib.hdfsDisconnect(self._handle)
-        self._handle = None
+            self._handle = None
+
+    def connected(self):
+        """Indicates whether this object is currently connected."""
+        return self._handle is not None
 
     def open(self, path, mode='rb', replication=0, buff=0, block_size=0):
         """ Open a file for reading or writing
@@ -234,8 +258,7 @@ class HDFileSystem(object):
         block_size: int
             Size of data-node blocks if writing
         """
-        if not self._handle:
-            raise IOError("Filesystem not connected")
+        self._ensure_connected()
         if block_size and mode != 'wb':
             raise ValueError('Block size only valid when writing new file')
         if ('a' in mode and self.exists(path) and
@@ -271,36 +294,130 @@ class HDFileSystem(object):
 
     def df(self):
         """ Used/free disc space on the HDFS system """
+        self._ensure_connected()
         cap = _lib.hdfsGetCapacity(self._handle)
         used = _lib.hdfsGetUsed(self._handle)
         return {'capacity': cap, 'used': used, 'percent-free': 100*(cap-used)/cap}
 
-    def get_block_locations(self, path, start=0, length=0):
-        """ Fetch physical locations of blocks """
-        raise NotImplementedError()
+    def get_hosts(self, path, start=None, length=None):
+        """ Fetch the physical locations of file chunks
 
-        if not self._handle:
-            raise IOError("Filesystem not connected")
-        start = int(start) or 0
-        length = int(length) or self.info(path)['size']
-        nblocks = ctypes.c_int(0)
-        out = _lib.hdfsGetFileBlockLocations(self._handle, ensure_bytes(path),
-                                ctypes.c_int64(start), ctypes.c_int64(length),
-                                ctypes.byref(nblocks))
-        locs = []
-        for i in range(nblocks.value):
-            block = out[i]
-            hosts = [block.hosts[i] for i in
-                     range(block.numOfNodes)]
-            locs.append({'hosts': hosts, 'length': block.length,
-                         'offset': block.offset})
-        _lib.hdfsFreeFileBlockLocations(out, nblocks)
+        Returns a list of lists of hostnames for each chunk.
+
+        Ex:
+            h = get_hosts('foo')
+            len(h) # The number of chunks
+            h[2]   # List of hosts that have a copy of the third chunk
+        """
+
+        # Let ``p`` be the return value from ``_lib.hdfsGetHosts``. ``p`` is a
+        # pointer to a dynamically allocated array of dynamically allocated
+        # arrays of c_char_p.
+        #
+        # p[block_index][host_index]
+        # If there was a library error, p.contents, p[0], and p[0].contents -> the same ValueError for NULL pointer access
+        # p[block_index + 1].contents raises ValueError -> block_index is the last block
+        # p[block_index][host_index + 1] is None -> host_index is the last host
+        #
+        # The following two helpers are for processing this data structure.
+
+        def until_null(p):
+            ix = 0
+            while True:
+                try:
+                    p[ix].contents
+                    yield p[ix]
+                    ix += 1
+                except ValueError:
+                    raise StopIteration()
+
+        def until_none(p):
+            ix = 0
+            while True:
+                if p[ix] is None:
+                    raise StopIteration()
+                else:
+                    yield p[ix]
+                    ix += 1
+
+        if start is None:
+            start = 0
+        if length is None:
+            length = self.info(path)['size']
+
+        self._ensure_connected()
+        out = _lib.hdfsGetHosts(self._handle, ensure_bytes(path), start, length)
+
+        # ``out`` is a pointer; if the library call failed (for example, the
+        # file doesn't exist), then trying to access ``out.contents`` will
+        # raise a ValueError for trying to access a null pointer
+        try:
+            out.contents
+        except ValueError:
+            # TODO Collect the error message
+            raise
+
+        hostnames = list(list(until_none(blockp)) for blockp in until_null(out))
+
+        _lib.hdfsFreeHosts(out)
+
+        return hostnames
+
+    def get_block_locations(self, path, start=None, length=None):
+        """ Fetch physical locations of blocks """
+
+        pathinfo = self.info(path)
+
+        if start is None:
+            start = 0
+        if length is None:
+            length = pathinfo['size']
+
+        assert start >= 0, "Invalid byte range"
+        assert length >= 0, "Invalid length"
+
+        pathsize = pathinfo['size']
+
+        assert (start + length) <= pathsize, "File is smaller than requested range"
+
+        # MapR allows for setting the chunk size at the file level
+        chunksize = pathinfo['block_size']
+
+        # Which chunk does offset ``start`` fall into?
+        first_chunk_index = start // chunksize
+        # What about offset ``start`` + ``length``? (Like Python lists. If
+        # chunksize == 10, start == 9, length == 1, we're talking about the
+        # slice that includes only byte number 9 in the file, which is only the
+        # first chunk.) (Need a special case to handle getting chunks for
+        # zero-length file.)
+        last_chunk_index = max(0, start + length - 1) // chunksize
+        # How many chunks are in this file? (This number is the largest chunk
+        # index for the file; the number of chunks minus one.)
+        max_chunk_index = max(0, pathsize - 1) // chunksize
+
+        # We need a list of the byte indexes where the chunks start
+        chunk_starts = list(range(first_chunk_index * chunksize, (last_chunk_index + 1) * chunksize, chunksize))
+        # And a list of how many bytes are contained in each chunk. This is
+        # just chunksize, except for the last chunk. We need to check if the
+        # request byte range includes the last chunk in the file.
+        chunk_lengths = [chunksize] * len(chunk_starts)
+        if last_chunk_index == max_chunk_index:
+            chunk_lengths[-1] = pathsize % chunksize
+
+        chunk_hosts = self.get_hosts(path, start, length)
+
+        locs = [
+            {'hosts': names, 'offset': strt, 'length': lngth}
+            for names, strt, lngth in zip(chunk_hosts, chunk_starts, chunk_lengths)
+        ]
+
         return locs
 
     def info(self, path):
         """ File information (as a dict) """
         if not self.exists(path):
             raise FileNotFoundError(path)
+        self._ensure_connected()
         fi = _lib.hdfsGetPathInfo(self._handle, ensure_bytes(path)).contents
         out = info_to_dict(fi)
         _lib.hdfsFreeFileInfo(ctypes.byref(fi), 1)
@@ -354,25 +471,29 @@ class HDFileSystem(object):
         """
         if not self.exists(path):
             raise FileNotFoundError(path)
-        num = ctypes.c_int(0)
-        fi = _lib.hdfsListDirectory(self._handle, ensure_bytes(path), ctypes.byref(num))
-        out = [ensure_string(info_to_dict(fi[i])) for i in range(num.value)]
-        _lib.hdfsFreeFileInfo(fi, num.value)
+
+        pathinfo = self.info(path)
+
+        if pathinfo['kind'] == 'file':
+            out = [pathinfo]
+        elif pathinfo['kind'] == 'directory':
+            self._ensure_connected()
+            num = ctypes.c_int(0)
+            fi = _lib.hdfsListDirectory(self._handle, ensure_bytes(path), ctypes.byref(num))
+            out = [ensure_string(info_to_dict(fi[i])) for i in range(num.value)]
+            # If the directory is empty, then ``fi`` does not need to be freed
+            _lib.hdfsFreeFileInfo(fi, num.value) if num.value > 0 else None
+        else:
+            raise TypeError("Path has an unknown type: %s" % pathinfo['kind'])
+
         if detail:
             return out
         else:
             return [o['name'] for o in out]
 
-    def __repr__(self):
-        state = ['Disconnected', 'Connected'][self._handle is not None]
-        return 'hdfs://%s:%s, %s' % (self.host, self.port, state)
-
-    def __del__(self):
-        if self._handle:
-            self.disconnect()
-
     def mkdir(self, path):
         """ Make directory at path """
+        self._ensure_connected()
         out = _lib.hdfsCreateDirectory(self._handle, ensure_bytes(path))
         if out != 0:
             # msg = ensure_string(_lib.hdfsGetLastError())
@@ -389,6 +510,7 @@ class HDFileSystem(object):
         """
         if replication < 0:
             raise ValueError('Replication must be positive, or 0 for system default')
+        self._ensure_connected()
         out = _lib.hdfsSetReplication(self._handle, ensure_bytes(path),
                                      ctypes.c_int16(int(replication)))
         if out != 0:
@@ -400,6 +522,7 @@ class HDFileSystem(object):
         """ Move file at path1 to path2 """
         if not self.exists(path1):
             raise FileNotFoundError(path1)
+        self._ensure_connected()
         out = _lib.hdfsRename(self._handle, ensure_bytes(path1), ensure_bytes(path2))
         return out == 0
 
@@ -407,6 +530,7 @@ class HDFileSystem(object):
         "Use recursive for `rm -r`, i.e., delete directory and contents"
         if not self.exists(path):
             raise FileNotFoundError(path)
+        self._ensure_connected()
         out = _lib.hdfsDelete(self._handle, ensure_bytes(path), bool(recursive))
         if out != 0:
             # msg = ensure_string(_lib.hdfsGetLastError())
@@ -415,6 +539,7 @@ class HDFileSystem(object):
 
     def exists(self, path):
         """ Is there an entry at path? """
+        self._ensure_connected()
         out = _lib.hdfsExists(self._handle, ensure_bytes(path) )
         return out == 0
 
@@ -441,6 +566,7 @@ class HDFileSystem(object):
         """
         if not self.exists(path):
             raise FileNotFoundError(path)
+        self._ensure_connected()
         out = _lib.hdfsChmod(self._handle, ensure_bytes(path), ctypes.c_short(mode))
         if out != 0:
             # msg = ensure_string(_lib.hdfsGetLastError())
@@ -451,6 +577,7 @@ class HDFileSystem(object):
         """ Change owner/group """
         if not self.exists(path):
             raise FileNotFoundError(path)
+        self._ensure_connected()
         out = _lib.hdfsChown(self._handle, ensure_bytes(path), ensure_bytes(owner),
                             ensure_bytes(group))
         if out != 0:
@@ -501,8 +628,7 @@ class HDFileSystem(object):
 
     def tail(self, path, size=1024):
         """ Return last bytes of file """
-        # todo: This logic doesn't work for mapr
-        length = self.du(path)[ensure_trailing_slash(path)]
+        length = self.info(path)['size']
         if size > length:
             return self.cat(path)
         with self.open(path, 'rb') as f:
@@ -755,14 +881,22 @@ class HDFile(object):
 
     def flush(self):
         """ Send buffer to the data-node; actual write to disc may happen later """
-        _lib.hdfsFlush(self._fs, self._handle)
+        if 'w' in self.mode:
+            _lib.hdfsFlush(self._fs, self._handle)
 
     def close(self):
         """ Flush and close file, ensuring the data is readable """
-        self.flush()
-        _lib.hdfsCloseFile(self._fs, self._handle)
-        self._handle = None  # _libhdfs releases memory
-        self.mode = 'closed'
+        if self.mode == 'closed':
+            # Prevent multiple attempts to close the file, which will cause libhdfs to throw errors
+            pass
+        elif self._handle is None:
+            # HDFile( ... ) threw an IOError; we never got a handle and we're cleaning up an empty object
+            self.mode = 'closed'
+        else:
+            self.flush()
+            _lib.hdfsCloseFile(self._fs, self._handle)
+            self._handle = None  # _libhdfs releases memory
+            self.mode = 'closed'
 
     @property
     def read1(self):

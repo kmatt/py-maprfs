@@ -78,6 +78,25 @@ class hdfsFS(ct.Structure):
 # param numOfBlock Output the number of elements in the returned array
 # return An array of BlockLocation struct."""
 
+hdfsGetHosts = _lib.hdfsGetHosts
+hdfsGetHosts.argtypes = [ct.POINTER(hdfsFS), ct.c_char_p, tOffset, tOffset]
+hdfsGetHosts.restype = ct.POINTER(ct.POINTER(ct.c_char_p))
+hdfsGetHosts.__doc__ = """Gets hostnames where a particular block, as determined by the offset and block size, is stored. Due to replication, a single block could be present on multiple hosts.
+
+This function can be useful for understanding the performance implications of file access, and to validate or verify changes to the replication factor.
+
+param fs The handle of the filesystem where the file is located. Obtain this handle with one of the ``hdfsConnect()`` APIs.
+param path The path of the file
+param start The start of the block
+param length The length of the block
+return If successful, returns a dynamically-allocated two-dimensional array of hostnames. The last element in the array is NULL. Returns NULL on error."""
+
+hdfsFreeHosts = _lib.hdfsFreeHosts
+hdfsFreeHosts.argtypes = [ct.POINTER(ct.POINTER(ct.c_char_p))]
+hdfsFreeHosts.restype = None
+hdfsFreeHosts.__doc__ = """Frees an array that was returned by ``hdfsGetHosts()``.
+
+param blockHosts The two-dimensional array that was returned by ``hdfsGetHosts()``."""
 
 # hdfsGetLastError = _lib.hdfsGetLastError
 # hdfsGetLastError.argtypes = []
