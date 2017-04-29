@@ -5,6 +5,10 @@ hdfs3 is a lightweight Python wrapper for libhdfs3_, a native C/C++ library to i
 
 pymaprfs is a MapR-compatible library by making some small modifications to the hdfs3 library, wrap MapR's C++ bindings instead of using the libhdfs bindings found in Cloudera or Hortonworks distros.
 
+Installation is simply `python setup.py install`
+
+Addition of a JRE library path may be required: `export LD_LIBRARY_PATH=/usr/lib/jvm/jre-1.8.0/lib/amd64/server`
+
 View the documentation_ for hdfs3.
 
 .. _libhdfs3: https://github.com/PivotalRD/libhdfs3
